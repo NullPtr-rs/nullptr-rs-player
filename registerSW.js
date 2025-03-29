@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/nullptr-rs-player/sw.js', { scope: '/nullptr-rs-player/' })})}

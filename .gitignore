@@ -1,0 +1,48 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Vite
+dist/
+.vite/
+
+# Output from TypeScript
+*.tsbuildinfo
+
+# Local env files
+.env
+.env.*.local
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDEs/Editors
+.vscode/
+.idea/
+*.sw?
+
+# Mac/Unix
+*.log
+*.pid
+*.seed
+*.tgz
+*.gz
+
+# Custom
+coverage/
+*.local
+*.sublime-project
+*.sublime-workspace
+
+# PWA plugin artifacts
+workbox-*.js
+manifest.webmanifest
+
+
