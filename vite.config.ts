@@ -8,7 +8,12 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'robots.txt', 'apple-touch-icon.png'],
+      includeAssets: [
+        'favicon.ico',
+        'robots.txt',
+        'apple-touch-icon.png',
+        'manifest.webmanifest', // ⬅ Add this line
+      ],
       manifest: {
         name: 'NullPtr.rs MP3 Player',
         short_name: 'NullPtr',
@@ -16,20 +21,21 @@ export default defineConfig({
         theme_color: '#05d9e8',
         background_color: '#000000',
         display: 'standalone',
-        start_url: '/',
+        start_url: '/nullptr-rs-player/',
+        scope: '/nullptr-rs-player/',
         icons: [
           {
-            src: '/icon-192x192.png',
+            src: 'icon-192x192.png',
             sizes: '192x192',
             type: 'image/png'
           },
           {
-            src: '/icon-512x512.png',
+            src: 'icon-512x512.png',
             sizes: '512x512',
             type: 'image/png'
           },
           {
-            src: '/icon-512x512.png',
+            src: 'icon-512x512.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any maskable'
