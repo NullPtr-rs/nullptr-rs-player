@@ -43,6 +43,5 @@ coverage/
 
 # PWA plugin artifacts
 workbox-*.js
-manifest.webmanifest
 
 
