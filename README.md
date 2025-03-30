@@ -109,8 +109,6 @@ Powered by [`vite-plugin-pwa`](https://vite-pwa-org.netlify.app/) (library homep
 
 ## ⚖️ License
 
-## 🎵 Licensing Notes
-
 - The **source code** of this project is licensed under the [MIT License](LICENSE).
 - However, all **audio tracks, cover art, and musical works** (located in the `music/` folder) are **© NullPtr.rs, All Rights Reserved**.
 
