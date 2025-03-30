@@ -343,72 +343,90 @@ const NullPtrMp3Player: React.FC = () => {
   // --- Play/Pause ---
   const handlePlayPause = useCallback(() => {
     if (!audioRef.current || !currentTrack) return; // Need a track to play/pause
+    const audio = audioRef.current;
+
     if (isPlaying) {
-      audioRef.current.pause();
+      audio.pause();
+      // Note: We don't set isLoadingTrack here. If the pause causes buffering later,
+      // the 'waiting' event might fire, but we won't show the spinner for that.
     } else {
-      audioRef.current.play().catch(err => {
-        console.error("Error playing audio:", err);
-        setPlaybackError("Playback failed. Check console/network or browser permissions.");
-        setIsPlaying(false); // Ensure state is correct on error
-      });
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+          playPromise.catch(err => {
+              console.error("Error playing audio:", err);
+              setPlaybackError("Playback failed. Check console/network or browser permissions.");
+              setIsPlaying(false); // Ensure state is correct on error
+              setIsLoadingTrack(false); // Also ensure spinner is off on playback error
+          });
+      }
+      // Optimistically set isPlaying to true for immediate UI feedback.
+      // The useEffect hook listening to 'isPlaying' also handles play/pause logic,
+      // and the event listeners ('playing', 'canplay', 'waiting', 'error')
+      // will manage the isLoadingTrack state more accurately for initial load/buffering.
     }
-    setIsPlaying(!isPlaying);
-  }, [isPlaying, currentTrack]);
+    setIsPlaying(!isPlaying); // Toggle the state
+  }, [isPlaying, currentTrack]); // Dependencies: isPlaying and currentTrack
 
   // --- Change Track (Internal Helper) ---
-  const changeTrack = useCallback((newIndex: number) => {
+  const changeTrack = useCallback((newIndex: number, tracksToUse: Track[]) => { // Pass tracks explicitly
+      if (newIndex < 0 || newIndex >= tracksToUse.length) {
+        console.warn("Attempted to change to invalid track index:", newIndex);
+        return;
+      }
       setCurrentTrackIndex(newIndex);
       setIsPlaying(true); // Auto-play next/prev/selected track
       setPlaybackError(null); // Clear previous playback errors
       setCurrentTime(0); // Reset time
       setDuration(0); // Reset duration display
-      setIsLoadingTrack(true); // Set loading state for the new track
+      setIsLoadingTrack(true); // Set loading state for the *new* track
       if (audioRef.current) {
-          // audioRef.current.src = tracks[newIndex].src; // React handles src update via prop
+          // audioRef.current.src = tracksToUse[newIndex].src; // React handles src update via prop change in <audio>
           audioRef.current.currentTime = 0; // Reset time explicitly
+          // Note: Setting src via key prop on <audio> element is preferred for full reset
           // load() and play() are handled by the useEffect below based on src/isPlaying change
       }
       if (progressBarRef.current) {
           progressBarRef.current.value = '0'; // Reset progress bar visual
       }
-  }, []); // Removed `tracks` dependency as it might cause issues if list updates mid-operation
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Dependencies are minimal as it receives tracksToUse; relies on caller providing current tracks
 
 
   // --- Next Track ---
   const handleNext = useCallback(() => {
     if (tracks.length === 0) return;
     const nextIndex = (currentTrackIndex + 1) % tracks.length;
-    changeTrack(nextIndex);
-  }, [currentTrackIndex, tracks.length, changeTrack]);
+    changeTrack(nextIndex, tracks); // Pass current tracks state
+  }, [currentTrackIndex, tracks, changeTrack]);
 
   // --- Previous Track ---
   const handlePrevious = useCallback(() => {
     if (tracks.length === 0) return;
     if (audioRef.current && audioRef.current.currentTime > 3) {
+      // If more than 3 seconds played, restart current track
       audioRef.current.currentTime = 0;
       setCurrentTime(0); // Update state too
+       if (!isPlaying) { // If paused, start playing on rewind
+            handlePlayPause();
+       }
     } else {
+      // Otherwise, go to the previous track
       const prevIndex = (currentTrackIndex - 1 + tracks.length) % tracks.length;
-      changeTrack(prevIndex);
+      changeTrack(prevIndex, tracks); // Pass current tracks state
     }
-  }, [currentTrackIndex, tracks.length, changeTrack]);
+  }, [currentTrackIndex, tracks, changeTrack, isPlaying, handlePlayPause]);
+
 
   // --- Handle Audio Events (Track Loading, Playback, Errors) ---
   useEffect(() => {
     const audioElement = audioRef.current;
-    if (!audioElement || !currentTrack) return; // Only run if we have an audio element AND a track selected
+    if (!audioElement) return; // Only run if we have an audio element
 
-    // Reset state for the new track about to load
-    setIsLoadingTrack(true);
-    setCurrentTime(0);
-    // Don't reset duration immediately, wait for loadedmetadata
-    if (progressBarRef.current) progressBarRef.current.value = '0';
-
-
+    // --- Event Handlers ---
     const handleTimeUpdate = () => setCurrentTime(audioElement.currentTime);
+
     const handleLoadedMetadata = () => {
       const newDuration = audioElement.duration;
-      // console.log("Loaded metadata, duration:", newDuration);
       if (!isNaN(newDuration) && isFinite(newDuration)) {
         setDuration(newDuration);
         if (progressBarRef.current) {
@@ -416,11 +434,12 @@ const NullPtrMp3Player: React.FC = () => {
         }
       } else {
           console.warn("Invalid duration received:", newDuration);
-          setDuration(0); // Set to 0 if invalid
-          if (progressBarRef.current) progressBarRef.current.max = "1"; // Fallback max
+          setDuration(0);
+          if (progressBarRef.current) progressBarRef.current.max = "1";
       }
-      setIsLoadingTrack(false); // Loading finished when metadata is loaded
+      // Moved setIsLoadingTrack(false) to 'canplay' or 'playing' for better accuracy
     };
+
     const handleEnded = () => {
       if (isRepeat) {
         audioElement.currentTime = 0;
@@ -430,82 +449,101 @@ const NullPtrMp3Player: React.FC = () => {
           setIsPlaying(false);
         });
       } else {
-        handleNext();
+        handleNext(); // handleNext calls changeTrack which sets loading state
       }
     };
+
     const handleError = (e: Event) => {
       console.error("Audio Element Error Event:", e);
-      const trackTitle = currentTrack?.title || 'the track';
-      setPlaybackError(`Error loading ${trackTitle}. Check URL/Network/CORS.`);
+      const trackTitle = tracks[currentTrackIndex]?.title || 'the track'; // Use current index from state
+      setPlaybackError(`Error loading or playing ${trackTitle}. Check URL/Network/CORS.`);
       setIsPlaying(false);
-      setIsLoadingTrack(false);
+      setIsLoadingTrack(false); // Ensure loading is off on error
       setDuration(0); // Reset duration on error
       setCurrentTime(0);
     };
+
     const handleWaiting = () => {
-        // console.log("Audio waiting (buffering)...");
-        setIsLoadingTrack(true);
-    }
-    const handlePlaying = () => {
-      // console.log("Audio playing.");
-      setIsLoadingTrack(false); // Should be playing now
-      setPlaybackError(null); // Clear errors once playing starts successfully
-    };
-    const handleCanPlay = () => {
-        // console.log("Audio can play.");
-        setIsLoadingTrack(false); // Ready to play, hide loader
-    }
-     const handleStalled = () => {
-        console.warn("Audio stalled.");
-        // Maybe set loading state? Depends on how long it stalls.
-        // setIsLoadingTrack(true); // Could cause flickering if stall is brief
-    }
-     const handleSuspend = () => {
-        // console.log("Audio suspended (e.g., download stopped).");
-        // May not require UI change unless it leads to an error or long wait.
+        console.log("Audio waiting (buffering)...");
+        // *********************************************************************
+        // ** CHANGE: Do NOT set isLoadingTrack here to avoid the stuck spinner issue **
+        // setIsLoadingTrack(true);
+        // *********************************************************************
     }
 
-    // Add listeners
+    const handlePlaying = () => {
+      // console.log("Audio playing.");
+      setIsLoadingTrack(false); // Playback has started (or resumed), hide loader
+      setPlaybackError(null); // Clear errors once playing starts successfully
+    };
+
+    const handleCanPlay = () => {
+        // console.log("Audio can play (potentially after loading/buffering).");
+        setIsLoadingTrack(false); // Ready to play, hide loader
+        // If duration wasn't set yet (e.g., mobile might delay loadedmetadata), try setting it here
+        if (duration === 0 && !isNaN(audioElement.duration) && isFinite(audioElement.duration)) {
+             setDuration(audioElement.duration);
+            if (progressBarRef.current) {
+                progressBarRef.current.max = String(audioElement.duration);
+            }
+        }
+    }
+
+     const handleStalled = () => {
+        console.warn("Audio stalled.");
+        // Might indicate a persistent network issue, but don't set loading spinner here
+        // as it could conflict with the play/pause state. Error event should handle failures.
+    }
+
+     const handleSuspend = () => {
+        // console.log("Audio suspended (e.g., download stopped).");
+        // Browser paused download, usually not an error state requiring UI change.
+    }
+
+    // --- Add Listeners ---
     audioElement.addEventListener('timeupdate', handleTimeUpdate);
     audioElement.addEventListener('loadedmetadata', handleLoadedMetadata);
     audioElement.addEventListener('ended', handleEnded);
     audioElement.addEventListener('error', handleError);
     audioElement.addEventListener('waiting', handleWaiting);
     audioElement.addEventListener('playing', handlePlaying);
-    audioElement.addEventListener('canplay', handleCanPlay);
+    audioElement.addEventListener('canplay', handleCanPlay); // Using canplay as well to ensure loading state is cleared
     audioElement.addEventListener('stalled', handleStalled);
     audioElement.addEventListener('suspend', handleSuspend);
 
 
-    // --- Autoplay Logic ---
-    // This effect runs when currentTrackIndex changes *or* isPlaying is toggled externally
-    // We need to ensure the audio element tries to play if isPlaying is true
-    if (isPlaying) {
-        // audioElement.load(); // Ensure data loading is triggered if needed (often implicit with src change)
-        const playPromise = audioElement.play();
-        if (playPromise !== undefined) {
-            playPromise.then(() => {
-                // Playback started successfully (or was already playing)
-                setIsLoadingTrack(false); // Ensure loader is off
-                setPlaybackError(null); // Clear any previous errors
-            }).catch(error => {
-                // Autoplay was prevented or another error occurred
-                console.warn("Autoplay/Play attempt failed:", error);
-                // Don't automatically set error unless it's persistent
-                // Browsers often block autoplay until user interaction
-                setIsPlaying(false); // Correct the state if play() failed
-                // If it's an actual loading error, the 'error' event handler above should catch it.
-                // setPlaybackError("Playback blocked or failed. Click play."); // Optional more direct message
-            });
+    // --- Play/Pause Logic Based on State ---
+    // This effect runs when isPlaying changes *or* the track source changes
+    if (currentTrack) { // Only attempt if a track is selected
+        if (isPlaying) {
+            // If isPlaying is true, ensure audio attempts to play
+            const playPromise = audioElement.play();
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    // Playback started successfully (or was already playing)
+                    // 'playing' or 'canplay' event should handle setting isLoadingTrack false
+                }).catch(error => {
+                    // Autoplay was prevented or another error occurred
+                    // Avoid console noise for common autoplay prevention
+                    if (error.name !== 'NotAllowedError') {
+                         console.warn("Play attempt failed:", error);
+                    }
+                    // If play() fails (e.g., browser restriction), reset state
+                    setIsPlaying(false);
+                    setIsLoadingTrack(false); // Ensure loading is off
+                     // Optionally set an error message, but can be annoying on initial load
+                     // setPlaybackError("Playback blocked by browser. Click play manually.");
+                });
+            }
+        } else {
+            // If isPlaying is false, ensure audio is paused
+            audioElement.pause();
         }
-    } else {
-        // If isPlaying is false, ensure the audio is paused
-        audioElement.pause();
     }
 
 
+    // --- Cleanup ---
     return () => {
-      // Cleanup listeners
       audioElement.removeEventListener('timeupdate', handleTimeUpdate);
       audioElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audioElement.removeEventListener('ended', handleEnded);
@@ -515,13 +553,12 @@ const NullPtrMp3Player: React.FC = () => {
       audioElement.removeEventListener('canplay', handleCanPlay);
       audioElement.removeEventListener('stalled', handleStalled);
       audioElement.removeEventListener('suspend', handleSuspend);
-
-       // Optional: Pause audio when component unmounts or track changes significantly?
-       // Usually not needed as the src change handles this, but can prevent leaks.
-       // audioElement.pause();
     };
-    // Re-run effect when the current track's SRC changes, or when isPlaying status flips
-  }, [currentTrack?.src, isPlaying, isRepeat, handleNext]); // Key dependencies: track src, play state, repeat state, next handler
+    // Dependencies: current track source (via key on audio element is better), isPlaying state,
+    // isRepeat state (for 'ended' handler), handleNext (for 'ended'), and currentTrackIndex (for error message).
+    // Passing `tracks` itself can cause unnecessary reruns if the array reference changes but content is same.
+    // Using currentTrackIndex and tracks[currentTrackIndex] is safer if needed.
+  }, [currentTrack?.src, isPlaying, isRepeat, handleNext, tracks, currentTrackIndex]); // Added tracks, currentTrackIndex
 
 
   // --- Update Audio Element Volume ---
@@ -533,35 +570,35 @@ const NullPtrMp3Player: React.FC = () => {
 
   // --- Shuffle Functionality ---
   const handleShuffle = useCallback(() => {
-    if (tracks.length < 2) return; // Can't shuffle 0 or 1 tracks
+    if (originalTracks.length < 2) return; // Need at least 2 tracks to shuffle
 
-    setIsShuffled(prev => {
-      const shuffling = !prev;
-      if (shuffling) {
-        // Important: originalTracks should already be set correctly when the playlist loads
-        // We shuffle the *current* `tracks` state
-        const current = tracks[currentTrackIndex]; // Keep the currently playing track
-        const rest = tracks.filter((_, i) => i !== currentTrackIndex);
+    setIsShuffled(prevShuffled => {
+        const shuffling = !prevShuffled;
+        if (shuffling) {
+            // Shuffle logic: Keep current track playing, shuffle the rest
+            const current = tracks[currentTrackIndex];
+            const rest = originalTracks.filter(t => t.src !== current?.src); // Shuffle from original list excluding current
 
-        // Fisher-Yates shuffle
-        for (let i = rest.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [rest[i], rest[j]] = [rest[j], rest[i]];
+            // Fisher-Yates shuffle on 'rest'
+            for (let i = rest.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [rest[i], rest[j]] = [rest[j], rest[i]];
+            }
+
+            const shuffledTracks = current ? [current, ...rest] : [...rest]; // Handle case where current might be null briefly
+            setTracks(shuffledTracks);
+            // Current track is now at index 0, update the index state
+            setCurrentTrackIndex(0);
+        } else {
+            // Unshuffle: Restore original order and find the current track's position
+            const currentPlayingSrc = tracks[currentTrackIndex]?.src;
+            setTracks([...originalTracks]); // Restore original order
+            const newIndex = originalTracks.findIndex(t => t.src === currentPlayingSrc);
+            setCurrentTrackIndex(newIndex >= 0 ? newIndex : 0); // Set index in original list
         }
-
-        const shuffledTracks = [current, ...rest];
-        setTracks(shuffledTracks);
-        setCurrentTrackIndex(0); // Current track is now at the start of the shuffled list
-      } else {
-        // Restore original order - find where the current track was in the original list
-         const currentTrackSrc = tracks[currentTrackIndex]?.src; // Safely get src
-         setTracks([...originalTracks]); // Restore from the saved original order
-         const newIndex = originalTracks.findIndex(t => t.src === currentTrackSrc);
-         setCurrentTrackIndex(newIndex >= 0 ? newIndex : 0); // Set index in the original list
-      }
-      return shuffling;
+        return shuffling; // Return the new state
     });
-  }, [tracks, currentTrackIndex, originalTracks]);
+}, [tracks, currentTrackIndex, originalTracks]); // Dependencies
 
 
   // --- Repeat Functionality ---
@@ -573,30 +610,32 @@ const NullPtrMp3Player: React.FC = () => {
    useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
        // Allow shortcuts if focus is on body, the player container, or elements INSIDE the player (excluding inputs potentially)
-      const isFocusInsidePlayer = playerRef.current?.contains(document.activeElement);
-      const isFocusOnBody = document.activeElement === document.body;
-      const isFocusOnPlayer = document.activeElement === playerRef.current;
+      const activeElement = document.activeElement;
+      const isInputFocused = activeElement instanceof HTMLInputElement ||
+                             activeElement instanceof HTMLTextAreaElement ||
+                             activeElement instanceof HTMLSelectElement ||
+                             (activeElement instanceof HTMLElement && activeElement.isContentEditable);
 
-       // Don't interfere if focus is on an input element *unless* it's the player itself or body
-       // Exception for space bar when focus is on buttons inside the player (let button handle it)
-       if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement || document.activeElement instanceof HTMLButtonElement) {
-            if (e.key === ' ' && !isFocusOnBody && !isFocusOnPlayer) { // Let buttons handle space
-                 return;
-            }
-            if (!(e.key === ' ' && isFocusOnPlayer) && !(e.key === ' ' && isFocusOnBody) && !(e.key !== ' ' && (isFocusInsidePlayer || isFocusOnPlayer || isFocusOnBody)) ) {
-                 // If not spacebar or focus is on input/textarea/button (and not body/player), ignore most keys
-                 return;
-            }
-       } else if (!isFocusInsidePlayer && !isFocusOnBody && !isFocusOnPlayer) {
-            // If focus is outside player completely, ignore
+       // Allow spacebar always unless focus is specifically on an input field
+       if (e.key === ' ' && isInputFocused) {
+            return; // Don't steal space from inputs
+       }
+       // For other keys, don't interfere if focus is on an input/editable element
+       if (e.key !== ' ' && isInputFocused) {
             return;
        }
 
-      // If we reach here, the event is likely safe to handle globally for the player
+      // Check if focus is generally outside the player or on irrelevant elements
+      if (!playerRef.current?.contains(activeElement) && activeElement !== document.body) {
+            // If focus is outside the player div and not on body, ignore most keys
+            // (Allow media keys like space, arrows maybe?) - This logic is simplified here
+            // You might refine this further if needed.
+      }
 
+      // Handle player shortcuts
       switch (e.key) {
         case ' ': // Play/Pause
-            if (currentTrack) { // Only if a track is loaded
+            if (currentTrack) { // Only if a track is loaded/available
                 e.preventDefault();
                 handlePlayPause();
             }
@@ -604,62 +643,73 @@ const NullPtrMp3Player: React.FC = () => {
         case 'ArrowRight': // Next or Seek Forward
            if (e.ctrlKey || e.metaKey) { // Use Ctrl or Cmd + Arrow for Next
                e.preventDefault();
-                handleNext();
-           } else if (audioRef.current && duration > 0) { // Seek Forward 5s
+               handleNext();
+           } else if (audioRef.current && duration > 0 && !isInputFocused) { // Seek Forward 5s (ensure not input focus)
                e.preventDefault();
                const newTime = Math.min(audioRef.current.currentTime + 5, duration);
                audioRef.current.currentTime = newTime;
-               setCurrentTime(newTime); // Update UI immediately
-                if (progressBarRef.current) progressBarRef.current.value = String(newTime); // Update slider visual
+               setCurrentTime(newTime);
+               if (progressBarRef.current) progressBarRef.current.value = String(newTime);
            }
           break;
         case 'ArrowLeft': // Previous or Seek Backward
             if (e.ctrlKey || e.metaKey) { // Use Ctrl or Cmd + Arrow for Previous
                e.preventDefault();
-                handlePrevious();
-            } else if (audioRef.current && duration > 0) { // Seek Backward 5s
+               handlePrevious();
+            } else if (audioRef.current && duration > 0 && !isInputFocused) { // Seek Backward 5s (ensure not input focus)
                e.preventDefault();
                const newTime = Math.max(audioRef.current.currentTime - 5, 0);
                audioRef.current.currentTime = newTime;
-               setCurrentTime(newTime); // Update UI immediately
-               if (progressBarRef.current) progressBarRef.current.value = String(newTime); // Update slider visual
+               setCurrentTime(newTime);
+               if (progressBarRef.current) progressBarRef.current.value = String(newTime);
             }
           break;
         case 'ArrowUp': // Volume Up
-          e.preventDefault();
-          setVolume(prev => Math.min(prev + 0.1, 1));
+          if (!isInputFocused) {
+            e.preventDefault();
+            setVolume(prev => Math.min(prev + 0.1, 1));
+          }
           break;
         case 'ArrowDown': // Volume Down
-          e.preventDefault();
-          setVolume(prev => Math.max(prev - 0.1, 0));
+          if (!isInputFocused) {
+            e.preventDefault();
+            setVolume(prev => Math.max(prev - 0.1, 0));
+          }
           break;
         case 'm': // Mute toggle
         case 'M':
-            e.preventDefault();
-            setVolume(prev => prev > 0 ? 0 : 0.7); // Toggle between 0 and default 0.7
+            if (!isInputFocused) {
+                e.preventDefault();
+                setVolume(prev => prev > 0 ? 0 : 0.7); // Toggle between 0 and default 0.7
+            }
             break;
         case 's': // Shuffle
         case 'S':
-            e.preventDefault();
-            handleShuffle();
+            if (!isInputFocused && tracks.length > 1) {
+                e.preventDefault();
+                handleShuffle();
+            }
             break;
         case 'r': // Repeat
         case 'R':
-            e.preventDefault();
-            handleRepeat();
+            if (!isInputFocused) {
+                e.preventDefault();
+                handleRepeat();
+            }
             break;
         case 'l': // Toggle Playlist
         case 'L':
-            e.preventDefault();
-            setShowPlaylist(prev => !prev);
+            if (!isInputFocused && tracks.length > 0) {
+                e.preventDefault();
+                setShowPlaylist(prev => !prev);
+            }
             break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-    // Dependencies ensure handlers always have latest state/values
-   }, [handlePlayPause, handleNext, handlePrevious, handleShuffle, handleRepeat, duration, currentTrack, volume]);
+   }, [handlePlayPause, handleNext, handlePrevious, handleShuffle, handleRepeat, duration, currentTrack, volume, tracks.length]); // Added tracks.length dependency
 
 
   // --- Seek Functionality ---
@@ -681,7 +731,7 @@ const NullPtrMp3Player: React.FC = () => {
   const handleSelectTrack = (index: number) => {
     if (index >= 0 && index < tracks.length) {
         if (index !== currentTrackIndex) {
-          changeTrack(index); // Use the helper to change track and start playing
+          changeTrack(index, tracks); // Use the helper to change track and start playing
         } else {
           // If clicking the currently playing track, toggle play/pause
           handlePlayPause();
@@ -699,30 +749,24 @@ const NullPtrMp3Player: React.FC = () => {
   const handleDragStart = (e: React.DragEvent<HTMLLIElement>, index: number) => {
       dragItem.current = index;
       e.dataTransfer.effectAllowed = 'move';
-      // Optional: Add styling for dragged item
        e.currentTarget.classList.add('opacity-50', 'bg-cyan-700/30');
   };
 
    const handleDragEnter = (e: React.DragEvent<HTMLLIElement>, index: number) => {
-       e.preventDefault(); // Necessary to allow drop
+       e.preventDefault();
        dragOverItem.current = index;
-       // Optional: Add visual cue for drop target (only if different from dragged item)
        if (dragItem.current !== index) {
-            // Clear previous targets
              playlistRef.current?.querySelectorAll('.drag-over-target').forEach(el => el.classList.remove('drag-over-target', 'bg-cyan-700/50'));
-            // Mark new target
             e.currentTarget.classList.add('drag-over-target', 'bg-cyan-700/50');
        }
    };
 
    const handleDragLeave = (e: React.DragEvent<HTMLLIElement>) => {
-       // Optional: Remove visual cue if leaving a potential drop target
        e.currentTarget.classList.remove('drag-over-target', 'bg-cyan-700/50');
-       // Maybe check if leaving towards parent and dragOverItem.current is this index, then reset dragOverItem? Less critical.
    };
 
    const handleDragOver = (e: React.DragEvent<HTMLElement>) => {
-       e.preventDefault(); // Necessary to allow drop
+       e.preventDefault();
        e.dataTransfer.dropEffect = 'move';
    };
 
@@ -731,10 +775,8 @@ const NullPtrMp3Player: React.FC = () => {
        const sourceIndex = dragItem.current;
        const targetIndex = dragOverItem.current;
 
-       // Reset visual styles first
        playlistRef.current?.querySelectorAll('.opacity-50').forEach(el => el.classList.remove('opacity-50', 'bg-cyan-700/30'));
        playlistRef.current?.querySelectorAll('.drag-over-target').forEach(el => el.classList.remove('drag-over-target', 'bg-cyan-700/50'));
-
 
        if (sourceIndex === null || targetIndex === null || sourceIndex === targetIndex) {
            dragItem.current = null;
@@ -742,27 +784,30 @@ const NullPtrMp3Player: React.FC = () => {
            return;
        }
 
+       const currentTrackSrcBeforeReorder = tracks[currentTrackIndex]?.src; // Get src before reordering
+
        const reorderedTracks = [...tracks];
        const [draggedItemContent] = reorderedTracks.splice(sourceIndex, 1);
        reorderedTracks.splice(targetIndex, 0, draggedItemContent);
 
-       const currentTrackSrc = tracks[currentTrackIndex]?.src; // Get src before reordering state
        setTracks(reorderedTracks); // Update the displayed list
 
-       // Update currentTrackIndex to follow the track that was playing
-       const newCurrentIndex = reorderedTracks.findIndex(t => t.src === currentTrackSrc);
+        // Update currentTrackIndex to follow the track that was playing *after* state updates
+        // Use useEffect or recalculate index based on the new 'reorderedTracks' array
+       const newCurrentIndex = reorderedTracks.findIndex(t => t.src === currentTrackSrcBeforeReorder);
        setCurrentTrackIndex(newCurrentIndex >= 0 ? newCurrentIndex : 0);
 
-       // If shuffled, drag/drop essentially creates a new custom order.
-       // The user would need to toggle shuffle off/on again to get a *new* random shuffle.
-       // The `originalTracks` state remains the initial loaded order unless shuffle is turned off.
+
+       // If NOT shuffled, drag-and-drop modifies the underlying "original" order as well.
+       // If shuffled, it just modifies the current temporary order.
        if (!isShuffled) {
-            // If NOT shuffled, the drag-drop modifies the *original* order as well
-            setOriginalTracks(reorderedTracks);
+            setOriginalTracks(reorderedTracks); // Update originalTracks if not shuffled
+       } else {
+           // If shuffled, dragging effectively creates a custom order.
+           // To prevent confusion, maybe turn shuffle OFF when the user drags?
+           // setIsShuffled(false); // Optional: Disable shuffle on manual reorder
        }
 
-
-       // Reset refs
        dragItem.current = null;
        dragOverItem.current = null;
    };
@@ -795,23 +840,14 @@ const NullPtrMp3Player: React.FC = () => {
     );
   }
 
-  // Check if tracks array is populated but somehow currentTrack is null (shouldn't happen with checks, but safety)
-   if (!currentTrack && tracks.length > 0) {
-     // This might happen briefly during state updates, or if index is invalid.
-     console.warn("State inconsistency: Tracks exist, but currentTrack is null. Resetting index.");
-     // Attempt to recover by setting index to 0. This might cause a re-render.
-     setCurrentTrackIndex(0); // This is risky inside render - prefer useEffect if possible
-     return <div className="min-h-screen bg-black text-pink-500 flex items-center justify-center font-mono p-4">Recovering player state...</div>;
-   }
-
-   // Main Player Render (only if playlist loaded and currentTrack is valid or track list is empty)
+   // Main Player Render
   return (
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black text-gray-300 font-mono flex flex-col items-center justify-center p-4">
        <style>{glitchStyles}</style> {/* Inject glitch styles */}
       <div
         ref={playerRef}
-        className="w-full max-w-md bg-gray-900/80 backdrop-blur-sm shadow-2xl shadow-cyan-900/30 rounded-lg overflow-visible border border-cyan-500/30 p-5 sm:p-6 relative"
-        tabIndex={0} // Make the player focusable for keyboard events
+        className="w-full max-w-md bg-gray-900/80 backdrop-blur-sm shadow-2xl shadow-cyan-900/30 rounded-lg overflow-hidden border border-cyan-500/30 p-5 sm:p-6 relative" // Changed overflow-visible to overflow-hidden
+        tabIndex={-1} // Make player container focusable programmatically if needed, but maybe not required for global keys
         aria-label="NullPtr.rs MP3 Player"
         aria-busy={isLoadingTrack || isPlaylistLoading} // Indicate busy state
       >
@@ -841,6 +877,18 @@ const NullPtrMp3Player: React.FC = () => {
           </p>
         </div>
 
+        {/* Audio Element (Hidden but controls linked) */}
+        {/* Use key to force re-render/reload when src changes - Crucial for clean state */}
+         <audio
+            ref={audioRef}
+            key={currentTrack?.src || 'no-track'} // Force recreation when src changes
+            src={currentTrack?.src}
+            preload="metadata" // Let browser decide best strategy
+            aria-hidden="true"
+            onVolumeChange={() => { /* Can be used if needed, but state controls volume */ }}
+            // All other event listeners are attached in the main useEffect hook
+         />
+
         {/* Render Player UI only if a track is potentially available */}
         {currentTrack ? (
             <>
@@ -855,8 +903,11 @@ const NullPtrMp3Player: React.FC = () => {
                         loading="lazy"
                         onError={(e) => {
                             console.warn(`Failed to load cover art: ${currentTrack.coverArt}`);
-                            e.currentTarget.style.display = 'none'; // Hide broken image
-                            // Optionally show a fallback div here instead
+                            // Optionally replace with placeholder on error
+                            const placeholder = document.createElement('div');
+                            placeholder.className = "bg-gray-800 border-2 border-dashed border-gray-600 rounded-md w-48 h-48 sm:w-56 sm:h-56 flex items-center justify-center mb-4 text-gray-700";
+                            placeholder.innerHTML = `<svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>`;
+                            e.currentTarget.replaceWith(placeholder);
                         }}
                         />
                     ) : (
@@ -871,44 +922,32 @@ const NullPtrMp3Player: React.FC = () => {
                     <p className="text-xs text-gray-500 truncate max-w-full px-2 text-center">{currentTrack.album} ({currentTrack.year})</p>
                 </div>
 
-                {/* Audio Element (Hidden but controls linked) */}
-                {/* Use key to force re-render/reload when src changes */}
-                 <audio
-                    ref={audioRef}
-                    key={currentTrack.src}
-                    src={currentTrack.src}
-                    preload="metadata" // Let browser decide best strategy, often metadata is good
-                    aria-hidden="true"
-                    // Event listeners are attached in useEffect
-                 />
-
-
                 {/* Progress Bar */}
                 <div className="mb-4 px-2 relative">
-                <input
-                    type="range"
-                    ref={progressBarRef}
-                    min="0"
-                    max={duration || 1} // Use duration, fallback to 1
-                    value={currentTime}
-                    onChange={handleSeek}
-                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:ring-offset-2 focus:ring-offset-gray-900"
-                    aria-label="Seek track progress"
-                    disabled={!duration || isLoadingTrack || isPlaylistLoading} // Disable if no duration or loading
-                    title={duration ? `Seek: ${formatTime(currentTime)} / ${formatTime(duration)}` : "Loading track..."}
-                />
-                {/* Loading Indicator over progress bar */}
-                {isLoadingTrack && (
-                    <div className="absolute top-0 left-0 w-full h-2 flex items-center justify-center pointer-events-none rounded-lg overflow-hidden">
-                        <div className="w-full h-full bg-cyan-600/30 animate-pulse-bg rounded-lg"></div>
+                    <input
+                        type="range"
+                        ref={progressBarRef}
+                        min="0"
+                        max={duration || 1} // Use duration, fallback to 1
+                        value={currentTime}
+                        onChange={handleSeek}
+                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:ring-offset-2 focus:ring-offset-gray-900"
+                        aria-label="Seek track progress"
+                        disabled={!duration || duration <= 0 || isNaN(duration) || isLoadingTrack} // Disable if no duration, loading, or invalid duration
+                        title={duration ? `Seek: ${formatTime(currentTime)} / ${formatTime(duration)}` : "Loading track..."}
+                    />
+                    {/* Loading Indicator over progress bar - Show only during initial load */}
+                    {isLoadingTrack && (!duration || duration <= 0) && ( // More specific condition for visual loading bar
+                        <div className="absolute top-0 left-0 w-full h-2 flex items-center justify-center pointer-events-none rounded-lg overflow-hidden">
+                            <div className="w-full h-full bg-cyan-600/30 animate-pulse-bg rounded-lg"></div>
+                        </div>
+                    )}
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>{formatTime(currentTime)}</span>
+                        <span>{duration && isFinite(duration) && duration > 0 ? formatTime(duration) : '--:--'}</span>
                     </div>
-                )}
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>{formatTime(currentTime)}</span>
-                    {/* Show duration only if it's valid */}
-                    <span>{duration && isFinite(duration) ? formatTime(duration) : '--:--'}</span>
                 </div>
-                </div>
+
 
                 {/* Main Controls */}
                 <div className="flex items-center justify-center space-x-3 sm:space-x-4 mb-4">
@@ -922,19 +961,18 @@ const NullPtrMp3Player: React.FC = () => {
                     >
                          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                            {/* Visual indication for repeat one vs all (if needed later) */}
-                            {isRepeat && <text x="12" y="17" textAnchor="middle" fontSize="9" fill="currentColor">1</text>}
+                            {/* Optional: Visual indication for repeat one */}
+                            {/* {isRepeat && <text x="12" y="17" textAnchor="middle" fontSize="9" fill="currentColor">1</text>} */}
                         </svg>
                     </button>
                     {/* Previous Button */}
                     <button
                         onClick={handlePrevious}
-                        className="p-2 rounded-full bg-gray-800 text-pink-500 hover:bg-pink-900/70 hover:text-pink-300 transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-pink-400 focus:ring-offset-2 focus:ring-offset-gray-900"
+                        className="p-2 rounded-full bg-gray-800 text-pink-500 hover:bg-pink-900/70 hover:text-pink-300 transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-pink-400 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
                         aria-label="Previous track"
                         title="Previous (Ctrl+Left) / Restart"
-                        disabled={tracks.length < 2 && (!audioRef.current || audioRef.current.currentTime <= 3)} // Disable if only one track and at start
+                        disabled={tracks.length < 1} // Disable only if truly no tracks
                     >
-                        {/* Skip Previous Icon */}
                         <svg className="w-6 h-6 sm:w-7 sm:h-7" fill="currentColor" viewBox="0 0 20 20"> <path d="M8.445 14.832A1 1 0 0010 14.136V5.864a1 1 0 00-1.555-.832L4 8.168V5.864a1 1 0 00-2 0v8.272a1 1 0 002 0v-2.305l4.445 3.001zM17 5.864a1 1 0 00-2 0v8.272a1 1 0 002 0V5.864z"/> </svg>
                     </button>
                     {/* Play/Pause Button */}
@@ -943,9 +981,11 @@ const NullPtrMp3Player: React.FC = () => {
                         className="p-3 rounded-full bg-cyan-500 text-black hover:bg-cyan-400 active:bg-cyan-600 transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
                         aria-label={isPlaying ? 'Pause' : 'Play'}
                         title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-                        disabled={isLoadingTrack || !duration || playlistError != null} // Disable while loading track, if duration is invalid, or if playlist failed
+                        // Disable only if track is actively loading (initial load spinner condition) or if there's fundamentally no duration/track
+                        disabled={isLoadingTrack || (!duration || duration <= 0 || isNaN(duration))}
                     >
-                        {isLoadingTrack ? ( // Show spinner only for track loading, not playlist loading
+                        {/* Show spinner ONLY during the initial track load phase */}
+                        {isLoadingTrack ? (
                             <svg className="w-8 h-8 sm:w-10 sm:h-10 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -959,34 +999,31 @@ const NullPtrMp3Player: React.FC = () => {
                     {/* Next Button */}
                     <button
                         onClick={handleNext}
-                        className="p-2 rounded-full bg-gray-800 text-pink-500 hover:bg-pink-900/70 hover:text-pink-300 transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-pink-400 focus:ring-offset-2 focus:ring-offset-gray-900"
+                        className="p-2 rounded-full bg-gray-800 text-pink-500 hover:bg-pink-900/70 hover:text-pink-300 transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-pink-400 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
                         aria-label="Next track"
                         title="Next (Ctrl+Right)"
-                        disabled={tracks.length < 2} // Disable if only one track
+                        disabled={tracks.length < 1} // Disable only if truly no tracks
                     >
-                         {/* Skip Next Icon */}
                          <svg className="w-6 h-6 sm:w-7 sm:h-7" fill="currentColor" viewBox="0 0 20 20"> <path d="M11.555 5.168A1 1 0 0010 5.864v8.272a1 1 0 001.555.832l4.445-3.001v2.305a1 1 0 002 0V5.864a1 1 0 00-2 0v2.305l-4.445-3.001zM4 5.864a1 1 0 00-2 0v8.272a1 1 0 002 0V5.864z"/> </svg>
                     </button>
                     {/* Shuffle Button */}
                     <button
                         onClick={handleShuffle}
-                        className={`p-2 rounded-full transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:ring-offset-2 focus:ring-offset-gray-900 ${isShuffled ? 'bg-cyan-900 text-cyan-300 ring-1 ring-cyan-400' : 'bg-gray-800 text-gray-400 hover:bg-cyan-800/70 hover:text-cyan-300'}`}
+                        className={`p-2 rounded-full transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:ring-offset-2 focus:ring-offset-gray-900 ${isShuffled ? 'bg-cyan-900 text-cyan-300 ring-1 ring-cyan-400' : 'bg-gray-800 text-gray-400 hover:bg-cyan-800/70 hover:text-cyan-300'} disabled:opacity-50 disabled:cursor-not-allowed`}
                         aria-pressed={isShuffled}
                         aria-label={isShuffled ? 'Disable shuffle' : 'Enable shuffle'}
                         title={isShuffled ? 'Shuffle On (S)' : 'Shuffle Off (S)'}
                         disabled={tracks.length < 2} // Disable if not enough tracks to shuffle
                     >
-                         {/* Shuffle Icon */}
                         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"> <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1zM3 6a1 1 0 011-1h2.155a1 1 0 01.832 1.555L4.832 9.707a1 1 0 01-1.555.832L1 8.832A1 1 0 011 7.168l1.168-1.168A1 1 0 013 6zm14 0a1 1 0 011-1h2.155a1 1 0 01.832 1.555L18.832 9.707a1 1 0 01-1.555.832L15 8.832A1 1 0 0115 7.168l1.168-1.168A1 1 0 0117 6zM3 14a1 1 0 011-1h2.155a1 1 0 01.832 1.555l-2.155 3.148a1 1 0 01-1.555.832L1 16.832A1 1 0 011 15.168l1.168-1.168A1 1 0 013 14zm14 0a1 1 0 011-1h2.155a1 1 0 01.832 1.555l-2.155 3.148a1 1 0 01-1.555.832L15 16.832a1 1 0 010-1.664l1.168-1.168A1 1 0 0117 14z" clipRule="evenodd"/> </svg>
                     </button>
                 </div>
 
                  {/* Volume Control & Playlist Toggle */}
-                 <div className="flex items-center justify-between space-x-3 sm:space-x-4 mb-4 px-2">
+                 <div className="flex items-center justify-between space-x-3 sm:space-x-4 px-2"> {/* Removed mb-4 */}
                     {/* Volume Slider */}
                     <div className="flex items-center space-x-2 flex-1">
                        <button onClick={() => setVolume(prev => prev > 0 ? 0 : 0.7)} title="Mute/Unmute (M)" aria-label="Mute/Unmute Volume" className="text-gray-500 hover:text-pink-400 focus:outline-none focus:text-pink-400">
-                           {/* Volume Icons */}
                             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
                                 {volume === 0 ? (
                                 <path d="M7.21 1.17a1 1 0 00-1.063.04L1.21 4.958A1 1 0 001 5.79v8.42a1 1 0 00.21.628l4.938 3.742a1 1 0 001.062.04 1 1 0 00.572-.909V2.08a1 1 0 00-.572-.909zM12.293 7.293a1 1 0 011.414 0L15 8.586l1.293-1.293a1 1 0 111.414 1.414L16.414 10l1.293 1.293a1 1 0 01-1.414 1.414L15 11.414l-1.293 1.293a1 1 0 01-1.414-1.414L13.586 10l-1.293-1.293a1 1 0 010-1.414z" />
@@ -1013,71 +1050,75 @@ const NullPtrMp3Player: React.FC = () => {
                     {/* Playlist Toggle Button */}
                     <button
                         onClick={() => setShowPlaylist(!showPlaylist)}
-                         className="text-sm text-lime-400 hover:text-lime-300 border border-lime-600/50 px-3 py-1 rounded hover:bg-lime-900/50 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-lime-400 focus:ring-offset-2 focus:ring-offset-gray-900 flex items-center space-x-1 flex-shrink-0"
+                         className="text-sm text-lime-400 hover:text-lime-300 border border-lime-600/50 px-3 py-1 rounded hover:bg-lime-900/50 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-lime-400 focus:ring-offset-2 focus:ring-offset-gray-900 flex items-center space-x-1 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                          aria-expanded={showPlaylist}
                          aria-controls="playlist-container"
                          title={showPlaylist ? 'Hide Playlist (L)' : 'Show Playlist (L)'}
                          disabled={tracks.length === 0} // Disable if no tracks
                     >
-                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h7"></path></svg>
+                         <svg className={`w-4 h-4 transition-transform duration-300 ${showPlaylist ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h7"></path></svg>
                         <span>List</span> ({tracks.length})
                     </button>
                 </div>
 
-
-                {/* Playlist Container */}
+                {/* --- MOVED & MODIFIED PLAYLIST CONTAINER --- */}
                 <div
                     ref={playlistRef}
                     id="playlist-container"
-                     className={`absolute bottom-full left-0 right-0 mb-2 max-h-64 overflow-y-auto bg-gray-800/95 backdrop-blur-sm border border-cyan-700/50 rounded-t-lg shadow-2xl z-10 scrollbar-thin transition-all duration-300 ease-in-out ${showPlaylist ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}
+                     // Removed absolute positioning, added width, overflow-hidden, margin/visibility/max-height transitions
+                     className={`w-full bg-gray-800/95 backdrop-blur-sm border border-cyan-700/50 rounded-lg shadow-lg scrollbar-thin transition-[max-height,opacity,margin] duration-300 ease-in-out overflow-hidden
+                                ${showPlaylist
+                                    ? 'max-h-64 lg:max-h-72 opacity-100 mt-4 visible overflow-y-auto' // Expanded state: set max-height, opacity, margin, visibility, allow scroll
+                                    : 'max-h-0 opacity-0 mt-0 invisible' // Collapsed state: zero height, opacity, margin, hidden
+                                }`}
                      onDragOver={handleDragOver}
-                     onDrop={handleDrop} // Handle drop on container (if not on specific item)
+                     onDrop={handleDrop} // Handle drop on container
                 >
-                <h3 className="text-sm font-semibold text-cyan-400 p-2 sticky top-0 bg-gray-800/95 backdrop-blur-sm z-10 border-b border-cyan-900/50 flex justify-between items-center">
-                    <span>Tracklist</span>
-                    {tracks.length > 1 && <span className="text-xs text-gray-500 font-normal">(Drag to reorder)</span>}
-                </h3>
-                <ul role="listbox" aria-label="Tracklist">
-                    {tracks.map((track, index) => (
-                    <li
-                        key={`${track.src}-${index}`} // Use src and index for key stability during reorder
-                        role="option"
-                        aria-selected={index === currentTrackIndex}
-                        draggable={tracks.length > 1} // Only allow dragging if more than one track
-                        onDragStart={(e) => tracks.length > 1 && handleDragStart(e, index)}
-                        onDragEnter={(e) => tracks.length > 1 && handleDragEnter(e, index)}
-                        onDragLeave={handleDragLeave}
-                        onDrop={handleDrop} // Handle drop on item itself
-                        onDragOver={handleDragOver} // Allow dropping ON this item
-                        className={`border-b border-gray-700/50 last:border-b-0 ${tracks.length > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} ${index === currentTrackIndex ? 'bg-cyan-900/60' : 'hover:bg-gray-700/70'}`}
-                        style={{ outlineOffset: '-1px' }} // Keep focus outline inside item
-                    >
-                        <button
-                        onClick={() => handleSelectTrack(index)}
-                        className={`w-full text-left p-2.5 flex items-center justify-between text-sm rounded-none transition-colors duration-100 ${index === currentTrackIndex ? 'text-white' : 'text-gray-300'}`}
-                        // Focus managed globally or by list item focus-visible
+                    <h3 className="text-sm font-semibold text-cyan-400 p-2 sticky top-0 bg-gray-800/95 backdrop-blur-sm z-10 border-b border-cyan-900/50 flex justify-between items-center">
+                        <span>Tracklist</span>
+                        {tracks.length > 1 && <span className="text-xs text-gray-500 font-normal">(Drag to reorder)</span>}
+                    </h3>
+                    <ul role="listbox" aria-label="Tracklist">
+                        {tracks.map((track, index) => (
+                        <li
+                            key={`${track.src}-${index}`} // More stable key during reorder
+                            role="option"
+                            aria-selected={index === currentTrackIndex}
+                            draggable={tracks.length > 1}
+                            onDragStart={(e) => tracks.length > 1 && handleDragStart(e, index)}
+                            onDragEnter={(e) => tracks.length > 1 && handleDragEnter(e, index)}
+                            onDragLeave={handleDragLeave}
+                            onDrop={handleDrop} // Handle drop on item
+                            onDragOver={handleDragOver} // Allow dropping ON this item
+                            className={`border-b border-gray-700/50 last:border-b-0 ${tracks.length > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} ${index === currentTrackIndex ? 'bg-cyan-900/60' : 'hover:bg-gray-700/70'}`}
+                            style={{ outlineOffset: '-1px' }} // Keep focus outline inside
                         >
-                        <span className={`font-medium ${index === currentTrackIndex ? 'text-cyan-300' : 'text-lime-400'} truncate flex-1 mr-2`}>
-                            {index + 1}. {track.title}
-                        </span>
-                        {/* Playing indicator */}
-                        {index === currentTrackIndex && isPlaying && (
-                            <svg className="w-4 h-4 text-cyan-400 animate-pulse flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M18 3a1 1 0 00-1.447-.894L4 8.447V4a1 1 0 00-2 0v12a1 1 0 002 0v-4.447l12.553 6.341A1 1 0 0018 17V3z"></path>
-                           </svg>
-                        )}
-                         {/* Loading indicator for current track */}
-                         {index === currentTrackIndex && isLoadingTrack && !isPlaying && (
-                            <svg className="w-4 h-4 text-cyan-600 animate-spin flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            <button
+                            onClick={() => handleSelectTrack(index)}
+                            className={`w-full text-left p-2.5 flex items-center justify-between text-sm rounded-none transition-colors duration-100 ${index === currentTrackIndex ? 'text-white' : 'text-gray-300'}`}
+                            >
+                            <span className={`font-medium ${index === currentTrackIndex ? 'text-cyan-300' : 'text-lime-400'} truncate flex-1 mr-2`}>
+                                {index + 1}. {track.title}
+                            </span>
+                            {/* Playing indicator */}
+                            {index === currentTrackIndex && isPlaying && !isLoadingTrack && ( // Show only if playing AND not loading
+                                <svg className="w-4 h-4 text-cyan-400 animate-pulse flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M18 3a1 1 0 00-1.447-.894L4 8.447V4a1 1 0 00-2 0v12a1 1 0 002 0v-4.447l12.553 6.341A1 1 0 0018 17V3z"></path>
                             </svg>
-                         )}
-                        </button>
-                    </li>
-                    ))}
-                </ul>
+                            )}
+                            {/* Loading indicator for the current track in the list */}
+                            {index === currentTrackIndex && isLoadingTrack && (
+                                <svg className="w-4 h-4 text-cyan-600 animate-spin flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                            )}
+                            </button>
+                        </li>
+                        ))}
+                    </ul>
                 </div>
+                {/* --- END MOVED PLAYLIST CONTAINER --- */}
             </>
         ) : (
             // Render this part if playlist loaded successfully but is empty

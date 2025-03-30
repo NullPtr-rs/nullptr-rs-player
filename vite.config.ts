@@ -18,7 +18,7 @@ export default defineConfig({
         name: 'NullPtr.rs MP3 Player',
         short_name: 'NullPtr',
         description: 'A glitchy-reactive offline-capable MP3 player by NullPtr.rs',
-        theme_color: '#05d9e8',
+        theme_color: '#000000',
         background_color: '#000000',
         display: 'standalone',
         start_url: '/nullptr-rs-player/',
