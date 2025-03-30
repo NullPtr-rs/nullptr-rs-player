@@ -84,8 +84,7 @@ Powered by [`vite-plugin-pwa`](https://vite-pwa-org.netlify.app/) (library homep
 
 ```
 ├── public/              # Static assets (PWA manifest, icons)
-├── src/                 # App source (React + TSX)
-│   └── App.tsx          # Main player logic
+├── App.tsx              # Main player logic
 ├── music/               # Playlists and audio (served via GitHub Pages)
 ├── dist/                # Production build (auto-created)
 ├── package.json         # Scripts and dependencies
