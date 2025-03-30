@@ -1,0 +1,51 @@
+{
+  "album": "Hymns of the Lost",
+  "artist": "NullPtr.rs",
+  "year": 2025,
+  "genre": "Dark Rock",
+  "tracks": [
+    {
+      "track_number": 1,
+      "title": "Brave One",
+      "file": "Hymns_of_the_Lost/Brave_One/Brave_One.m4a",
+      "cover_art": "Hymns_of_the_Lost/Brave_One/Brave_One.jpg"
+    },
+    {
+      "track_number": 2,
+      "title": "Echoes",
+      "file": "Hymns_of_the_Lost/Echoes/Echoes.m4a",
+      "cover_art": "Hymns_of_the_Lost/Echoes/Echoes.jpg"
+    },
+    {
+      "track_number": 3,
+      "title": "Abyssal King",
+      "file": "Hymns_of_the_Lost/Abyssal_King/Abyssal_King.m4a",
+      "cover_art": "Hymns_of_the_Lost/Abyssal_King/Abyssal_King.jpg"
+    },
+    {
+      "track_number": 4,
+      "title": "Eternal Hunt",
+      "file": "Hymns_of_the_Lost/Eternal_Hunt/Eternal_Hunt.m4a",
+      "cover_art": "Hymns_of_the_Lost/Eternal_Hunt/Eternal_Hunt.jpg"
+    },
+    {
+      "track_number": 5,
+      "title": "Steelheart",
+      "file": "Hymns_of_the_Lost/Steelheart/Steelheart.m4a",
+      "cover_art": "Hymns_of_the_Lost/Steelheart/Steelheart.jpg"
+    },
+    {
+      "track_number": 6,
+      "title": "Starscourge",
+      "file": "Hymns_of_the_Lost/Starscourge/Starscourge.m4a",
+      "cover_art": "Hymns_of_the_Lost/Starscourge/Starscourge.jpg"
+    },
+    {
+      "track_number": 7,
+      "title": "Synthetic Cage",
+      "file": "Hymns_of_the_Lost/Synthetic_Cage/Synthetic_Cage.m4a",
+      "cover_art": "Hymns_of_the_Lost/Synthetic_Cage/Synthetic_Cage.jpg"
+    }
+  ]
+}
+
